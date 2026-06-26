@@ -24,6 +24,21 @@ ambiguity), `safety.py` (allowlist inversion), `llm.py` (async + 8s timeout), `c
 `.gitignore`, strengthened tests, `.github/workflows/ci.yml`. The findings below are retained
 as the original audit record.
 
+### Polish round (senior-engineer pass)
+
+- **Latent bug fixed:** `docker-compose.yml` healthcheck used `curl`, absent from
+  `python:3.11-slim` → container would always report unhealthy. Switched to a Python probe.
+- `docker-compose.yml` now runs **keyless out of the box** (`environment:` with defaults
+  instead of a required `.env` file) — a fresh clone runs `docker compose up` with no setup.
+- Dockerfile: `PYTHONUNBUFFERED`/`PYTHONDONTWRITEBYTECODE` + a built-in `HEALTHCHECK`.
+- Removed dead code: unused imports (`EvidenceVerdict`, `timedelta`, `Optional`) and the
+  unused `user_type` parameter on `determine_severity`.
+- Closed a phishing generalization gap: credential-free social-engineering reports
+  ("pretending to be from…", "fake SMS", "fraudster called") now classify correctly without
+  over-triggering on benign uses of "pretending".
+- Tests: **168 passing** (added `test_classification.py` + false-negative/positive guards).
+  Verified over real HTTP (uvicorn, keyless): /health 200 <1ms, malformed→400, samples ~3ms.
+
 ---
 
 ## Verdict
