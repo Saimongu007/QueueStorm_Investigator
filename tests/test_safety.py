@@ -86,6 +86,20 @@ class TestCustomerReplyValidation:
         is_safe, _ = validate_customer_reply(text)
         assert not is_safe
 
+    @pytest.mark.parametrize("text", [
+        "We will credit your account with 500 taka.",
+        "We will reimburse you within 24 hours.",
+        "We'll return your money tomorrow.",
+        "Your account will be restored soon.",
+    ])
+    def test_broadened_refund_promises_are_unsafe(self, text):
+        is_safe, _ = validate_customer_reply(text)
+        assert not is_safe, f"missed refund/reversal promise: {text!r}"
+
+    def test_passcode_request_is_unsafe(self):
+        is_safe, _ = validate_customer_reply("Please confirm your passcode to continue.")
+        assert not is_safe
+
     def test_bangla_safe_reply_passes(self):
         text = "অনুগ্রহ করে কারো সাথে আপনার পিন বা ওটিপি শেয়ার করবেন না।"
         is_safe, _ = validate_customer_reply(text)

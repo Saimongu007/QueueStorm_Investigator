@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # them ONLY inside a warning context — evaluated per sentence so a request in
 # one sentence isn't masked by a warning in another.
 CREDENTIAL_RE = re.compile(
-    r"(pin|otp|password|one[\s-]?time password|card number|cvv|"
+    r"(pin|otp|password|passcode|one[\s-]?time password|card number|cvv|"
     r"পিন|ওটিপি|পাসওয়ার্ড)",
     re.IGNORECASE,
 )
@@ -44,14 +44,14 @@ def _has_credential_request(text: str) -> bool:
 FORBIDDEN_REFUND_PATTERNS = [
     r"we will refund",
     r"we('ll| will) (process|initiate|complete).*refund",
-    r"you will receive.*refund",
+    r"we('ll| will) (refund|credit|reimburse|return)\b",
+    r"you will (receive|get).*(refund|credit|reimburse)",
     r"we are refunding",
     r"refund has been.*processed",
     r"your money.*will be returned",
-    r"account.*will be unblocked",
+    r"account.*will be (unblocked|unlocked|restored)",
     r"will be reversed",
-    r"we have (initiated|processed|completed).*refund",
-    r"we have (initiated|processed|completed).*reversal",
+    r"we have (initiated|processed|completed).*(refund|reversal)",
     r"আপনার টাকা ফেরত দেওয়া হবে",
 ]
 

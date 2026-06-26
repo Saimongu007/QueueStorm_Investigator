@@ -37,3 +37,16 @@ def test_merchant_pretending_is_not_phishing():
     """'pretending' in a non-impersonation sense must not misfire."""
     text = "the merchant is pretending he never received my settlement"
     assert classify_case(text, [], "en") != P
+
+
+@pytest.mark.parametrize("text", [
+    "I haven't received my cashback from the campaign.",
+    "My 50% discount offer is not working.",
+    "I am supposed to get cashback for cashing out. I have cashed out twice yesterday, yet i received no cashback.",
+    "আমি ক্যাশব্যাক পাইনি",
+])
+def test_promotional_cashback_maps_to_other(text):
+    """Cashback/campaign/offer complaints map to the spec-legal `other` case_type
+    (there is no `promotional_issue` in the official taxonomy) — even when they
+    contain duplicate_payment keywords like 'twice'."""
+    assert classify_case(text, [], "en") == CaseType.other

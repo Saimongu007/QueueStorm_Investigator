@@ -126,6 +126,41 @@ class TestInvalidEnumValues:
         assert response.json()["ticket_id"] == "TKT-EDGE-10"
 
 
+class TestUserTypeRouting:
+    """A generic ('other') complaint routes by reporter role (spec: merchant/agent
+    side complaints), without overriding case-specific routing."""
+
+    def test_merchant_generic_routes_to_merchant_operations(self):
+        r = client.post("/analyze-ticket", json={
+            "ticket_id": "RT-1",
+            "complaint": "I have a general question about my account status.",
+            "user_type": "merchant",
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["case_type"] == "other"
+        assert body["department"] == "merchant_operations"
+
+    def test_agent_generic_routes_to_agent_operations(self):
+        r = client.post("/analyze-ticket", json={
+            "ticket_id": "RT-2",
+            "complaint": "I have a general question about my account status.",
+            "user_type": "agent",
+        })
+        assert r.json()["department"] == "agent_operations"
+
+    def test_merchant_phishing_still_routes_to_fraud_risk(self):
+        """Case-specific routing must NOT be overridden by user_type."""
+        r = client.post("/analyze-ticket", json={
+            "ticket_id": "RT-3",
+            "complaint": "Someone called me pretending to be from bKash and asked for my OTP.",
+            "user_type": "merchant",
+        })
+        body = r.json()
+        assert body["case_type"] == "phishing_or_social_engineering"
+        assert body["department"] == "fraud_risk"
+
+
 class TestMinimalRequest:
     def test_only_required_fields(self):
         """Minimal valid request with only ticket_id and complaint."""

@@ -452,13 +452,16 @@ async def investigate(ticket: TicketRequest) -> TicketResponse:
     user_type = ticket.user_type.value if ticket.user_type else "customer"
 
     severity = rules.determine_severity(case_type, amount, evidence_verdict)
-    department = rules.route_department(case_type, evidence_verdict)
+    department = rules.route_department(case_type, evidence_verdict, user_type)
     human_review = rules.requires_human_review(
         case_type, evidence_verdict, relevant_txn_id, amount
     )
 
     # 5. Build context for text generation
     language = ticket.language.value if ticket.language else "en"
+    # Promotional/cashback complaints stay case_type=`other` (spec-legal) but get
+    # cashback-aware wording from the text layer.
+    is_promo = rules.is_promotional(ticket.complaint.lower())
     context = {
         "ticket_id": ticket.ticket_id,
         "complaint": safe_complaint,
@@ -473,6 +476,7 @@ async def investigate(ticket: TicketRequest) -> TicketResponse:
         "department": department.value,
         "human_review_required": human_review,
         "transaction_details": format_transaction(history, relevant_txn_id),
+        "text_variant": "promotional" if is_promo else None,
     }
 
     # 6. LLM text generation (with rule-based fallback)

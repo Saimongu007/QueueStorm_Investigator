@@ -50,8 +50,22 @@ def is_phishing(complaint_lower: str) -> bool:
     return has_credential and has_social
 
 
-# Priority order: phishing > duplicate > wrong_transfer > payment_failed
-#   > agent_cash_in > merchant_settlement > refund > other
+# Promotional/cashback complaints have no dedicated case_type in the official 8-value
+# taxonomy, so they map to `other` (spec-compliant). We still detect them so the text
+# layer can produce a cashback-aware reply (see text_variant in generate_text_fields).
+PROMO_KEYWORDS = [
+    "cashback", "campaign", "offer", "discount", "promot", "bonus",
+    "ক্যাশব্যাক", "অফার", "বোনাস",
+]
+
+
+def is_promotional(complaint_lower: str) -> bool:
+    """Detect a cashback/campaign/offer complaint (classified as `other`)."""
+    return any(k in complaint_lower for k in PROMO_KEYWORDS)
+
+
+# Priority order: phishing > promotional(->other) > duplicate > wrong_transfer
+#   > payment_failed > agent_cash_in > merchant_settlement > refund > other
 CASE_KEYWORDS: list[tuple[CaseType, list[str]]] = [
     (CaseType.duplicate_payment, [
         "twice", "double", "duplicate", "charged twice", "deducted twice",
@@ -90,6 +104,12 @@ def classify_case(complaint: str, transaction_history: list, language: Optional[
     # Phishing has top priority but uses co-occurrence (not bare credential nouns).
     if is_phishing(complaint_lower):
         return CaseType.phishing_or_social_engineering
+
+    # Cashback/campaign complaints -> `other` (no promo case_type in the spec).
+    # Checked before duplicate_payment so "cashed out twice ... no cashback" is not
+    # misread as a duplicate charge.
+    if is_promotional(complaint_lower):
+        return CaseType.other
 
     for case_type, keywords in CASE_KEYWORDS:
         for keyword in keywords:
@@ -142,10 +162,26 @@ DEPARTMENT_MAP = {
 }
 
 
-def route_department(case_type: CaseType, evidence_verdict: str) -> Department:
-    """Route to the correct department. Special case: contested refund."""
+def route_department(
+    case_type: CaseType,
+    evidence_verdict: str,
+    user_type: Optional[str] = None,
+) -> Department:
+    """Route to the correct department.
+
+    Case-type routing wins first (so phishing->fraud_risk, wrong_transfer->dispute,
+    etc. are never overridden). Special case: a contested refund goes to dispute
+    resolution. Only for an otherwise-uncategorised `other` complaint do we fall back
+    to the reporter's role — the spec lists "merchant side complaints" ->
+    merchant_operations and "agent side complaints" -> agent_operations.
+    """
     if case_type == CaseType.refund_request and evidence_verdict == "inconsistent":
         return Department.dispute_resolution
+    if case_type == CaseType.other:
+        if user_type == "merchant":
+            return Department.merchant_operations
+        if user_type == "agent":
+            return Department.agent_operations
     return DEPARTMENT_MAP.get(case_type, Department.customer_support)
 
 
@@ -436,37 +472,118 @@ TEMPLATES_BN = {
 }
 
 
-def generate_text_fields(context: dict) -> dict:
-    """Generate text fields using rule-based templates.
+# Cashback/campaign complaints (classified as `other`) — case_type stays spec-legal,
+# but the wording is promo-aware. Selected via context["text_variant"] == "promotional".
+PROMO_TEXT = {
+    "en": {
+        "agent_summary": (
+            "Customer reports a promotional/cashback concern tied to the campaign. "
+            "No transaction dispute — verify campaign eligibility."
+        ),
+        "recommended_next_action": (
+            "Check the customer's eligibility against the campaign terms and timing, "
+            "then communicate the eligibility outcome through official channels."
+        ),
+        "customer_reply": (
+            "Thank you for reaching out about the campaign. We have noted your cashback "
+            "concern and our support team will review your eligibility and update you "
+            "through official channels. Please do not share your PIN or OTP with anyone."
+        ),
+    },
+    "bn": {
+        "agent_summary": (
+            "গ্রাহক ক্যাম্পেইন সংক্রান্ত একটি ক্যাশব্যাক সমস্যার কথা জানিয়েছেন। "
+            "কোনো লেনদেন বিরোধ নয় — ক্যাম্পেইন যোগ্যতা যাচাই করুন।"
+        ),
+        "recommended_next_action": (
+            "ক্যাম্পেইনের শর্ত ও সময় অনুযায়ী গ্রাহকের যোগ্যতা যাচাই করুন এবং "
+            "অফিসিয়াল চ্যানেলে ফলাফল জানান।"
+        ),
+        "customer_reply": (
+            "ক্যাম্পেইন সম্পর্কে যোগাযোগ করার জন্য ধন্যবাদ। আপনার ক্যাশব্যাক সংক্রান্ত "
+            "বিষয়টি আমরা অবগত হয়েছি এবং আমাদের দল যোগ্যতা যাচাই করে অফিসিয়াল চ্যানেলে "
+            "জানাবে। অনুগ্রহ করে কারো সাথে আপনার পিন বা ওটিপি শেয়ার করবেন না।"
+        ),
+    },
+}
 
-    This is the fallback when LLM is unavailable and also serves as a
-    baseline for any case_type/language combination.
+# Used whenever no specific transaction could be identified (insufficient_data /
+# ambiguous). Avoids leaking placeholders like "N/A" into a case-specific template.
+NO_MATCH_TEXT = {
+    "en": {
+        "agent_summary": (
+            "Customer reports an issue, but no single matching transaction could be "
+            "confirmed from the provided history. More detail is needed to identify it."
+        ),
+        "recommended_next_action": (
+            "Ask the customer for the transaction ID, exact amount, and approximate time, "
+            "then locate the relevant transaction and proceed per policy."
+        ),
+        "customer_reply": (
+            "Thank you for reaching out. To help you faster, please share the transaction "
+            "ID, the amount involved, and a short description of what went wrong. "
+            "Please do not share your PIN or OTP with anyone."
+        ),
+    },
+    "bn": {
+        "agent_summary": (
+            "গ্রাহক একটি সমস্যার কথা জানিয়েছেন, তবে প্রদত্ত ইতিহাস থেকে নির্দিষ্ট কোনো "
+            "লেনদেন শনাক্ত করা যায়নি। আরও তথ্য প্রয়োজন।"
+        ),
+        "recommended_next_action": (
+            "গ্রাহকের কাছ থেকে লেনদেন আইডি, সঠিক পরিমাণ এবং আনুমানিক সময় জেনে নিন, "
+            "তারপর সংশ্লিষ্ট লেনদেন শনাক্ত করে নীতি অনুযায়ী এগিয়ে যান।"
+        ),
+        "customer_reply": (
+            "আমাদের সাথে যোগাযোগ করার জন্য ধন্যবাদ। আপনাকে দ্রুত সাহায্য করতে, অনুগ্রহ করে "
+            "লেনদেন আইডি, পরিমাণ এবং সমস্যার সংক্ষিপ্ত বিবরণ জানান। "
+            "অনুগ্রহ করে কারো সাথে আপনার পিন বা ওটিপি শেয়ার করবেন না।"
+        ),
+    },
+}
+
+
+def generate_text_fields(context: dict) -> dict:
+    """Generate the three text fields using rule-based templates.
+
+    Selection order:
+      1. Promotional/cashback complaints -> promo-aware text (case_type stays `other`).
+      2. No matched transaction          -> clean generic text (never leak placeholders).
+      3. Otherwise                        -> the case-specific template with txn details.
     """
     case_type_str = context.get("case_type", "other")
-    language = context.get("language", "en")
+    lang = "bn" if context.get("language") == "bn" else "en"
 
-    # Resolve CaseType enum
+    # 1) Promotional / cashback
+    if context.get("text_variant") == "promotional":
+        return dict(PROMO_TEXT[lang])
+
+    # 2) No specific transaction identified
+    txn_id = context.get("relevant_transaction_id")
+    txn_details = context.get("transaction_details") or {}
+    if not (txn_id and txn_details):
+        return dict(NO_MATCH_TEXT[lang])
+
+    # 3) Case-specific template, with real transaction details
     try:
         case_type = CaseType(case_type_str) if isinstance(case_type_str, str) else case_type_str
     except ValueError:
         case_type = CaseType.other
 
-    # Pick the right template set
-    if language == "bn":
-        templates = TEMPLATES_BN.get(case_type, TEMPLATES_BN.get(CaseType.other, {}))
+    table = TEMPLATES_BN if lang == "bn" else TEMPLATES_EN
+    templates = table.get(case_type) or table.get(CaseType.other) or TEMPLATES_EN[CaseType.other]
+
+    amt = txn_details.get("amount")
+    if isinstance(amt, (int, float)) and float(amt).is_integer():
+        amt_str = str(int(amt))           # 5000.0 -> "5000"
+    elif amt is not None:
+        amt_str = str(amt)                # keep fractional amounts as-is
     else:
-        templates = TEMPLATES_EN.get(case_type, TEMPLATES_EN.get(CaseType.other, {}))
-
-    # Build template variables
-    txn_id = context.get("relevant_transaction_id") or "N/A"
-    txn_details = context.get("transaction_details") or {}
-    amount = txn_details.get("amount", "N/A")
-    counterparty = txn_details.get("counterparty", "N/A")
-
+        amt_str = ""
     fmt = {
         "txn_id": txn_id,
-        "amount": amount,
-        "counterparty": counterparty,
+        "amount": amt_str,
+        "counterparty": txn_details.get("counterparty", ""),
     }
 
     result = {}
