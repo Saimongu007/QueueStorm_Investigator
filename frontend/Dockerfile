@@ -8,8 +8,9 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install ALL dependencies (incl. devDependencies — vite/eslint are needed to BUILD).
+# `--only=production` would omit vite and break `npm run build`.
+RUN npm ci
 
 # Copy source files
 COPY . .
