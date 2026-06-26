@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  queuestorm:
+    build: .
+    ports:
+      - "8000:8000"
+    # Runs keyless out of the box (no .env required). Set GROQ_API_KEY in your
+    # shell to enable the optional LLM polish: `GROQ_API_KEY=xxx docker compose up`.
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - MODEL_NAME=${MODEL_NAME:-llama-3.1-8b-instant}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    restart: unless-stopped
+    healthcheck:
+      # python:slim has no curl — use the interpreter that's already present.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
